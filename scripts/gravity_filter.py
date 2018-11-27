@@ -3,43 +3,40 @@
 
 import rospy
 import pybullet as p
-import pybullet_data
+import math
 from pyuwds.reconfigurable_client import ReconfigurableClient
 from uwds_msgs.msg import Changes
-from uwds_msgs.srv import *
 from pyuwds.types import FILTER, MESH
-import tf_conversions
-import geometry_msgs
-import tf
 
 
 class GravityFilter(ReconfigurableClient):
+    """
+    """
     def __init__(self):
         """
         """
         self.ressource_folder = rospy.get_param("~ressource_folder")
         self.time_step = rospy.get_param("~time_step", 0.01)
         self.simulation_step = rospy.get_param("~simulation_step", 1.0)
+        self.max_distance = rospy.get_param("~max_distance", 0.05) # max distance between perceived and simulated before considerig the simulation output false
+        self.max_duration = rospy.get_param("~max_duration", 0.5) # max duration in seconds between last observation and current time before considering an object as not perceived
+        p.connect(p.DIRECT) # Initialize bullet non-graphical version
+        p.setGravity(0, 0, -10)
+        p.setAdditionalSearchPath(self.ressource_folder)
+        p.setTimeStep(self.time_step)
+        self.node_id_map = {}
+        self.reverse_node_id_map = {}
+        self.perceived = {}
         ReconfigurableClient.__init__(self, "gravity_filter", FILTER)
 
     def onReconfigure(self, worlds_names):
         """
         """
-        pass
 
     def onSubscribeChanges(self, world_name):
         """
         """
-        p.connect(p.DIRECT) # Initialize bullet non-graphical version
-        p.setGravity(0, 0, -10)
-        p.setAdditionalSearchPath(self.ressource_folder)
-        p.setTimeStep(self.time_step)
-        self.urdf_available = {}
-        self.node_id_map = {}
-        self.reverse_node_id_map = {}
-        planeId = p.loadURDF("plane.urdf")
-        self.node_id_map[self.worlds[world_name].scene.rootID] = planeId
-        self.reverse_node_id_map[planeId] = self.worlds[world_name].scene.rootID
+        pass
 
     def onUnsubscribeChanges(self, world_name):
         """
@@ -49,25 +46,42 @@ class GravityFilter(ReconfigurableClient):
     def onChanges(self, world_name, header, invalidations):
         """
         """
-        rospy.loginfo("[%s::onChanges] Changes received for world <%s>", self.node_name, world_name)
         changes = self.filter(world_name, header, invalidations)
         if len(changes.nodes_to_update) > 0:
             self.sendWorldChanges(world_name+"_stable", header, changes)
-            rospy.loginfo("[%s::onChanges] Changes send in world <%s>", self.node_name, world_name+"_stable")
 
     def filter(self, world_name, header, invalidations):
         """
         """
         changes = Changes()
+
         for node_id in invalidations.node_ids_updated:
+            if node_id not in self.perceived:
+                self.perceived[node_id] = 1.0
+            else:
+                self.perceived[node_id] = 1.0
+
             self.updateBulletNodes(world_name, node_id)
+
         self.stepSimulation()
+
         for node_id, node in self.worlds[world_name].scene.nodes.items():
-            if node_id in invalidations.node_ids_updated:
-                if node_id in self.urdf_available:
-                    if self.urdf_available[node_id]:
-                        t, q = p.getBasePositionAndOrientation(self.node_id_map[node_id])
-                        x, y, z = t
+            if node_id in self.node_id_map:
+                if self.node_id_map[node_id] > 0:
+                    t, q = p.getBasePositionAndOrientation(self.node_id_map[node_id])
+                    p.resetBaseVelocity(self.node_id_map[node_id], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0])
+                    self.perceived[node_id] *= 0.97
+                    x, y, z = t
+                    x_dist = node.position.pose.position.x - x
+                    y_dist = node.position.pose.position.y - y
+                    z_dist = node.position.pose.position.z - z
+                    dist = math.sqrt((x_dist*x_dist) + (y_dist*y_dist) + (z_dist*z_dist))
+                    if dist > self.max_distance and self.perceived[node_id] > 0.8:
+                        position = [node.position.pose.position.x, node.position.pose.position.y, node.position.pose.position.z]
+                        orientation = [node.position.pose.orientation.x, node.position.pose.orientation.y, node.position.pose.orientation.z, node.position.pose.orientation.w]
+                        p.resetBasePositionAndOrientation(self.node_id_map[node_id], position, orientation)
+                        changes.nodes_to_update.append(node)
+                    else:
                         node.position.pose.position.x = x
                         node.position.pose.position.y = y
                         node.position.pose.position.z = z
@@ -76,9 +90,13 @@ class GravityFilter(ReconfigurableClient):
                         node.position.pose.orientation.y = y
                         node.position.pose.orientation.z = z
                         node.position.pose.orientation.w = w
-                if node_id in invalidations.node_ids_updated:
-                    changes.nodes_to_update.append(node)
+                        changes.nodes_to_update.append(node)
+                else:
+                    if node_id in invalidations.node_ids_updated:
+                        changes.nodes_to_update.append(node)
 
+        for mesh_id in invalidations.mesh_ids_updated:
+            changes.meshes_to_update.append(self.meshes[mesh_id])
         return changes
 
     def stepSimulation(self):
@@ -93,29 +111,26 @@ class GravityFilter(ReconfigurableClient):
         The urdf need to have the same name than the node name
         :return:
         """
-        if node_id != self.worlds[world_name].scene.rootID:
-            node = self.worlds[world_name].scene.nodes[node_id]
-            if node.type == MESH:
-                rospy.loginfo("[%s::updateBulletNodes] Update node <%s(%s)> to bullet", self.node_name, node.name, node_id)
-                position = [node.position.pose.position.x, node.position.pose.position.y, node.position.pose.position.z]
-                orientation = [node.position.pose.orientation.x, node.position.pose.orientation.y, node.position.pose.orientation.z, node.position.pose.orientation.w]
-                if node_id not in self.node_id_map:
-                    try:
-                        bullet_id = p.loadURDF(node.name+".urdf", position, orientation)
-                        self.urdf_available[node_id] = True
-                    except Exception as e:
-                        self.urdf_available[node_id] = False
-                        bullet_id = -1
-                    if self.urdf_available[node_id]:
-                        rospy.loginfo("[%s::updateBulletNodes] "+node.name+".urdf' loaded successfully", self.node_name)
-                        self.reverse_node_id_map[bullet_id] = node_id
-                    self.node_id_map[node_id] = bullet_id
-                else:
-                    if self.urdf_available[node_id] > 0:
-                        p.resetBaseVelocity(self.node_id_map[node_id], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0])
-                        p.resetBasePositionAndOrientation(self.node_id_map[node_id], position, orientation)
+        if self.worlds[world_name].scene.rootID not in self.node_id_map:
+            self.node_id_map[self.worlds[world_name].scene.rootID] = p.loadURDF("plane.urdf")
+        node = self.worlds[world_name].scene.nodes[node_id]
+        if node.type == MESH:
+            position = [node.position.pose.position.x, node.position.pose.position.y, node.position.pose.position.z]
+            orientation = [node.position.pose.orientation.x, node.position.pose.orientation.y, node.position.pose.orientation.z, node.position.pose.orientation.w]
+            if node_id not in self.node_id_map:
+                try:
+                    self.node_id_map[node_id] = p.loadURDF(node.name+".urdf", position, orientation)
+                    rospy.loginfo("[%s::updateBulletNodes] "+node.name+".urdf' loaded successfully", self.node_name)
+                except Exception as e:
+                    self.node_id_map[node_id] = -1
+                if self.node_id_map[node_id] > 0:
+                    self.reverse_node_id_map[self.node_id_map[node_id]] = node_id
             else:
-                self.urdf_available[node_id] = False
+                if self.node_id_map[node_id] > 0:
+                    p.resetBaseVelocity(self.node_id_map[node_id], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0])
+                    p.resetBasePositionAndOrientation(self.node_id_map[node_id], position, orientation)
+        else:
+            self.node_id_map[node_id] = -1
 
 
 if __name__ == '__main__':

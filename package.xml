@@ -11,7 +11,7 @@
   <!--   BSD, MIT, Boost Software License, GPLv2, GPLv3, LGPLv2.1, LGPLv3 -->
   <license>LAAS-CNRS(2018)</license>
 
-  <url type="repository">https://github.com/underworlds-robot</url>
+  <url type="repository">https://github.com/underworlds-robot/uwds_physics_clients</url>
 
   <author email="yoan.sallami@laas.fr">Yoan Sallami</author>
 
@@ -36,14 +36,9 @@
   <!-- Use doc_depend for packages you need only for building documentation: -->
   <!--   <doc_depend>doxygen</doc_depend> -->
   <buildtool_depend>catkin</buildtool_depend>
-  <depend>nodelet</depend>
-  <depend>pluginlib</depend>
-  <depend>roscpp</depend>
+  <depend>rospy</depend>
   <depend>uwds_msgs</depend>
   <depend>uwds</depend>
-  <depend>ar_track_alvar_msgs</depend>
-  <depend>jsk_recognition_msgs</depend>
-  <depend>perception_msgs</depend>
 
 
   <!-- The export tag contains other, unspecified, tags -->

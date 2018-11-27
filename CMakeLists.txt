@@ -13,7 +13,7 @@ find_package(catkin REQUIRED COMPONENTS
   uwds
 )
 
-find_package(Bullet REQUIRED COMPONENTS system)
+#find_package(Bullet REQUIRED COMPONENTS system)
 
 ###################################
 ## catkin specific configuration ##
@@ -25,8 +25,8 @@ find_package(Bullet REQUIRED COMPONENTS system)
 ## CATKIN_DEPENDS: catkin_packages dependent projects also need
 ## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
-  INCLUDE_DIRS include
-  LIBRARIES ${PROJECT_NAME}
+#  INCLUDE_DIRS include
+#  LIBRARIES ${PROJECT_NAME}
   CATKIN_DEPENDS rospy uwds_msgs uwds
 #  DEPENDS system_lib
 )
@@ -37,10 +37,10 @@ catkin_package(
 
 ## Specify additional locations of header files
 ## Your package locations should be listed before other locations
-include_directories(
+#include_directories(
 #  include
-  ${catkin_INCLUDE_DIRS}
-)
+#  ${catkin_INCLUDE_DIRS}
+#)
 
 ## Declare a C++ library
 #add_library(${PROJECT_NAME}
