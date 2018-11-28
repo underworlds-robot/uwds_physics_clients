@@ -10,7 +10,7 @@
   <arg name="default_inputs" default="env"/>
   <arg name="ressource_folder" default="$(find laas_objects)/res/urdf/"/>
   <arg name="time_step" default="0.01"/>
-  <arg name="simulation_step" default="0.2"/>
+  <arg name="simulation_step" default="0.25"/>
 
   <node name="$(arg nodelet_manager)"
         pkg="nodelet" type="nodelet"

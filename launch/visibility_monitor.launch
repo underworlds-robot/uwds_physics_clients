@@ -27,7 +27,7 @@
         if="$(arg start_server)"/>
 
   <node name="visibility_monitor"
-        pkg="uwds_physics_clients" type="beliefs_filter.py"
+        pkg="uwds_physics_clients" type="visibility_monitor.py"
         respawn="$(arg respawn)"
         output="$(arg output)"
         launch-prefix="$(arg launch-prefix)">

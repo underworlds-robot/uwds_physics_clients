@@ -76,7 +76,7 @@ class GravityFilter(ReconfigurableClient):
                     y_dist = node.position.pose.position.y - y
                     z_dist = node.position.pose.position.z - z
                     dist = math.sqrt((x_dist*x_dist) + (y_dist*y_dist) + (z_dist*z_dist))
-                    if dist > self.max_distance and self.perceived[node_id] > 0.8:
+                    if dist > self.max_distance and self.perceived[node_id] > 0.7:
                         position = [node.position.pose.position.x, node.position.pose.position.y, node.position.pose.position.z]
                         orientation = [node.position.pose.orientation.x, node.position.pose.orientation.y, node.position.pose.orientation.z, node.position.pose.orientation.w]
                         p.resetBasePositionAndOrientation(self.node_id_map[node_id], position, orientation)

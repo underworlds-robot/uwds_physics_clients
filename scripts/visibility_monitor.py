@@ -8,7 +8,6 @@ import pybullet as p
 import pybullet_data
 from pyuwds.reconfigurable_client import ReconfigurableClient
 from uwds_msgs.msg import Changes
-from uwds_msgs.srv import *
 from pyuwds.types import FILTER, MESH, CAMERA
 import tf
 
@@ -22,9 +21,9 @@ class BeliefsFilter(ReconfigurableClient):
         self.urdf_available = {}
         self.node_id_map = {}
         self.reverse_node_id_map = {}
-        self.min_treshold = rospy.get_param("~min_treshold", 0.7)
-        self.width = rospy.get_param("~width", 360/6)
-        self.height = rospy.get_param("~height", 480/6)
+        self.min_treshold = rospy.get_param("~min_treshold", 0.4)
+        self.width = rospy.get_param("~width", 480/6)
+        self.height = rospy.get_param("~height", 360/6)
         ReconfigurableClient.__init__(self, "beliefs_filter", FILTER)
 
     def onReconfigure(self, worlds):
@@ -45,13 +44,12 @@ class BeliefsFilter(ReconfigurableClient):
     def onChanges(self, world_name, header, invalidations):
         """
         """
-        rospy.loginfo("[%s::onChanges] Changes received for world <%s>", self.node_name, world_name)
-        changes = self.monitor(world_name, header, invalidations)
+        changes = self.filter(world_name, header, invalidations)
         if len(changes.situations_to_update) > 0:
             self.sendWorldChanges("visibilities", header, changes)
             rospy.loginfo("[%s::onChanges] Changes send in world <%s>", self.node_name, world_name+"_stable")
 
-    def monitor(self, world_name, header, invalidations):
+    def filter(self, world_name, header, invalidations):
         """
         """
         changes = Changes()
@@ -62,16 +60,18 @@ class BeliefsFilter(ReconfigurableClient):
             if node_id in invalidations.node_ids_updated:
                 if node.type == CAMERA:
                     visibilities = self.computeVisibilities(world_name, node_id)
-                    #print node_id
-                    #print visibilities
-                    #situations = computeSituations(world_name, header.stamp, node_id, visibilities)
-                    #for situation in situations:
-                    #    changes.situations_to_update.append(situation)
-                #changes.nodes_to_update.append(node)
+                    situations = computeSituations(world_name, header.stamp, node_id, visibilities)
+                    for situation in situations:
+                        changes.situations_to_update.append(situation)
         return changes
 
     def computeVisibilities(self, world_name, camera_id):
+        """
+        """
         visibilities = {}
+        mean_distances_from_center = {}
+        nb_pixel = {}
+        relative_sizes = {}
         if camera_id in self.worlds[world_name].scene.nodes:
             camera_node = self.worlds[world_name].scene.nodes[camera_id]
             position = [camera_node.position.pose.position.x, camera_node.position.pose.position.y, camera_node.position.pose.position.z]
@@ -82,9 +82,12 @@ class BeliefsFilter(ReconfigurableClient):
             clipnear = float(self.worlds[world_name].scene.getNodeProperty(camera_id, "clipnear"))
             clipfar = float(self.worlds[world_name].scene.getNodeProperty(camera_id, "clipfar"))
             aspect = float(self.worlds[world_name].scene.getNodeProperty(camera_id, "aspect"))
-            proj_matrix = p.computeProjectionMatrixFOV(fov, aspect, clipnear, clipfar)
+            proj_matrix = p.computeProjectionMatrixFOV(40.0, aspect, clipnear, clipfar)
             width, height, rgb, depth, seg = p.getCameraImage(self.width, self.height, viewMatrix=view_matrix, projectionMatrix=proj_matrix, flags = p.ER_SEGMENTATION_MASK_OBJECT_AND_LINKINDEX)
-            max = 0
+            max_nb_pixel = 0
+            background_nb_pixel = 0
+            max_visibility = 0
+            r = min(width, height)
             for line in range(0, height):
                 for col in range(0, width):
                     pixel = seg[line][col]
@@ -93,54 +96,75 @@ class BeliefsFilter(ReconfigurableClient):
                         if bullet_id in self.reverse_node_id_map:
                             uwds_id = self.reverse_node_id_map[bullet_id]
                             if uwds_id != self.worlds[world_name].scene.rootID:
+                                if uwds_id not in mean_distances_from_center:
+                                    mean_distances_from_center[uwds_id] = 0.0
+                                line_dist = (line-(line/2.0))
+                                col_dist = (col-(col/2.0))
+                                #dist_from_center = math.sqrt(line_dist*line_dist+col_dist*col_dist)
+                                dist_from_center = math.sqrt(col_dist*col_dist)
+                                mean_distances_from_center[uwds_id] += dist_from_center
+                                if uwds_id not in nb_pixel:
+                                    nb_pixel[uwds_id] = 0
+                                nb_pixel[uwds_id] += 1
                                 if uwds_id not in visibilities:
-                                    visibilities[uwds_id] = 0.0
-                                visibilities[uwds_id] += 1.0 * (math.sqrt(line*line+col*col))
-                                if visibilities[uwds_id] > max:
-                                    max = visibilities[uwds_id]
-            if len(visibilities) > 0:
+                                    visibilities[uwds_id] = 0
+                                visibilities[uwds_id] += 1 - min(1, dist_from_center/r)
+                                if max_visibility < visibilities[uwds_id]:
+                                    max_visibility = visibilities[uwds_id]
+
+                    else:
+                        background_nb_pixel += 1.0
+
+            if len(mean_distances_from_center) > 0:
                 print "camera <%s> see :" % self.worlds[world_name].scene.nodes[camera_id].name
-                for node_id, visibility_score in visibilities.items():
-                    visibilities[camera_id] = visibility_score / max
+                for node_id, mean_dist in mean_distances_from_center.items():
+                    mean_distances_from_center[node_id] = mean_dist / nb_pixel[node_id]
                     camera_node = self.worlds[world_name].scene.nodes[camera_id]
                     object_node = self.worlds[world_name].scene.nodes[node_id]
-                    print " - object <%s> with %5f confidence" % (object_node.name, visibilities[camera_id])
+                    if mean_distances_from_center[node_id] < r:
+                        visibilities[node_id] = 1 - mean_distances_from_center[node_id]/r
+                    else:
+                        visibilities[node_id] = 0
+                    if visibilities[node_id] > self.min_treshold:
+                        print " - object <%s> with %5f confidence" % (object_node.name, visibilities[node_id])
         return visibilities
 
-    def computeBeliefs(self, world_name, stamp, camera_id, beliefs):
-        pass
-
     def computeSituations(self, world_name, stamp, camera_id, visibilities):
+        """
+        """
         situations = []
+        for situation in self.worlds[world_name].timeline:
+            if self.worlds[world_name].timeline.getSituationProperty(situation.id, "predicate") == "isVisible":
+                subject_id = self.worlds[world_name].timeline.getSituationProperty(situation.id, "subject")
+                object_id = self.worlds[world_name].timeline.getSituationProperty(situation.id, "subject")
+                if camera_id == subject_id:
+                    if object_id in visibilities:
+                        situation.confidence = visibilities[object_id]
+                        del visibilities[object_id]
+                    else:
+                        situation.end = stamp
+                    situations.append(situation)
+
         for id_seen, visibility_score in visibilities:
-            if camera_id+id_seen not in self.current_situation_map and visibility_score > self.min_treshold:
-                situation = Situation()
-                situation.id = str(uuid.uuid4())
-                situation.type = FACT
-                situation.description = self.worlds[world_name].scene.nodes[id_seen].name + "is visible by" + self.worlds[world_name].scene.nodes[camera_id].name
-                predicate = Property()
-                predicate.name = "predicate"
-                predicate.data = "isVisible"
-                situation.properties.append(predicate)
-                subject = Property()
-                subject.name = "subject"
-                subject.data = camera_id
-                situation.properties.append(subject)
-                object = Property()
-                object.name = "object"
-                object.data = id_seen
-                situation.properties.append(object)
-                situation.confidence = visibility_score
-                situation.start.data = stamp
-                self.current_situation_map[camera_id+entity_seen] = situation
-                situations.append(situation)
-            else:
-                situation = self.current_situation_map[camera_id+entity_seen]
-                situation.confidence = visibility_score
-                if situation.confidence < self.min_treshold:
-                    situation.end = stamp
-                    del self.current_situation_map[camera_id+entity_seen]
-                situations.append(situation)
+            situation = Situation()
+            situation.id = str(uuid.uuid4())
+            situation.type = FACT
+            situation.description = self.worlds[world_name].scene.nodes[id_seen].name + "is visible by" + self.worlds[world_name].scene.nodes[camera_id].name
+            predicate = Property()
+            predicate.name = "predicate"
+            predicate.data = "isVisible"
+            situation.properties.append(predicate)
+            subject = Property()
+            subject.name = "subject"
+            subject.data = camera_id
+            situation.properties.append(subject)
+            object = Property()
+            object.name = "object"
+            object.data = id_seen
+            situation.properties.append(object)
+            situation.confidence = visibility_score
+            situation.start.data = stamp
+            situations.append(situation)
         return situations
 
     def updateBulletNodes(self, world_name, node_id):
