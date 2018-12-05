@@ -4,19 +4,11 @@
   <arg name="respawn" default="false"/>
   <arg name="start_manager" default="false"/>
   <arg name="start_server" default="false"/>
-  <arg name="nodelet_manager" default="gravity_filter_nodelet_manager"/>
+  <arg name="nodelet_manager" default=""/>
   <arg name="launch-prefix" default=""/>
 
   <arg name="default_inputs" default="env_stable"/>
   <arg name="ressource_folder" default="$(find laas_objects)/res/urdf/"/>
-
-  <node name="$(arg nodelet_manager)"
-        pkg="nodelet" type="nodelet"
-        args="manager"
-        respawn="$(arg respawn)"
-        output="$(arg output)"
-        launch-prefix="$(arg launch-prefix)"
-        if="$(arg start_manager)"/>
 
   <node name="uwds_server"
         pkg="nodelet" type="nodelet"

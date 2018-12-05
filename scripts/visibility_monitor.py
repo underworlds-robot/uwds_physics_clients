@@ -3,33 +3,33 @@
 
 import rospy
 import math
+import uuid
 import numpy
 import pybullet as p
 import pybullet_data
 from pyuwds.reconfigurable_client import ReconfigurableClient
-from uwds_msgs.msg import Changes
-from pyuwds.types import FILTER, MESH, CAMERA
+from uwds_msgs.msg import Changes, Situation, Property
+from pyuwds.types import FILTER, MESH, CAMERA, FACT
 import tf
 
-class BeliefsFilter(ReconfigurableClient):
+class VisibilityMonitor(ReconfigurableClient):
     def __init__(self):
         """
         """
         self.ressource_folder = rospy.get_param("~ressource_folder")
-        p.connect(p.GUI) # Initialize bullet non-graphical version
+        p.connect(p.DIRECT) # Initialize bullet non-graphical version
         p.setAdditionalSearchPath(self.ressource_folder)
         self.urdf_available = {}
         self.node_id_map = {}
         self.reverse_node_id_map = {}
         self.min_treshold = rospy.get_param("~min_treshold", 0.4)
-        self.width = rospy.get_param("~width", 480/6)
-        self.height = rospy.get_param("~height", 360/6)
-        ReconfigurableClient.__init__(self, "beliefs_filter", FILTER)
+        self.width = rospy.get_param("~width", 480/8)
+        self.height = rospy.get_param("~height", 360/8)
+        ReconfigurableClient.__init__(self, "visibility_monitor", FILTER)
 
     def onReconfigure(self, worlds):
         """
         """
-        pass
 
     def onSubscribeChanges(self, world_name):
         """
@@ -44,25 +44,37 @@ class BeliefsFilter(ReconfigurableClient):
     def onChanges(self, world_name, header, invalidations):
         """
         """
-        changes = self.filter(world_name, header, invalidations)
+        changes = self.monitor(world_name, header, invalidations)
         if len(changes.situations_to_update) > 0:
             self.sendWorldChanges("visibilities", header, changes)
-            rospy.loginfo("[%s::onChanges] Changes send in world <%s>", self.node_name, world_name+"_stable")
+            rospy.loginfo("[%s::onChanges] Changes send (%d situations) in world <%s>", self.node_name, len(changes.situations_to_update), "visibilities")
 
-    def filter(self, world_name, header, invalidations):
+    def monitor(self, world_name, header, invalidations):
         """
         """
         changes = Changes()
         for node_id in invalidations.node_ids_updated:
             self.updateBulletNodes(world_name, node_id)
 
+        evaluated = []
+        not_evaluated = []
         for node_id, node in self.worlds[world_name].scene.nodes.items():
-            if node_id in invalidations.node_ids_updated:
-                if node.type == CAMERA:
+            #if node_id in invalidations.node_ids_updated:
+            if node.type == CAMERA:
+                if node_id in invalidations.node_ids_updated:
                     visibilities = self.computeVisibilities(world_name, node_id)
-                    situations = computeSituations(world_name, header.stamp, node_id, visibilities)
+                    situations = self.updateSituations(world_name, header, node_id, visibilities)
                     for situation in situations:
                         changes.situations_to_update.append(situation)
+                    evaluated.append(node_id)
+
+        for node_id, node in self.worlds[world_name].scene.nodes.items():
+            if node.type == CAMERA:
+                if (rospy.Time() - node.last_observation.data).to_sec() > 1.0:
+                    situations = self.updateSituations(world_name, header, node_id, {})
+                    for situation in situations:
+                        changes.situations_to_update.append(situation)
+
         return changes
 
     def computeVisibilities(self, world_name, camera_id):
@@ -77,7 +89,7 @@ class BeliefsFilter(ReconfigurableClient):
             position = [camera_node.position.pose.position.x, camera_node.position.pose.position.y, camera_node.position.pose.position.z]
             orientation = [camera_node.position.pose.orientation.x, camera_node.position.pose.orientation.y, camera_node.position.pose.orientation.z, camera_node.position.pose.orientation.w]
             euler = tf.transformations.euler_from_quaternion(orientation)
-            view_matrix = p.computeViewMatrixFromYawPitchRoll(position, -0.2, math.degrees(euler[2]), math.degrees(euler[1]), math.degrees(euler[1]), 2)
+            view_matrix = p.computeViewMatrixFromYawPitchRoll(position, -0.5, math.degrees(euler[2]), math.degrees(euler[1]), math.degrees(euler[1]), 2)
             fov = float(self.worlds[world_name].scene.getNodeProperty(camera_id, "hfov"))
             clipnear = float(self.worlds[world_name].scene.getNodeProperty(camera_id, "clipnear"))
             clipfar = float(self.worlds[world_name].scene.getNodeProperty(camera_id, "clipfar"))
@@ -116,7 +128,7 @@ class BeliefsFilter(ReconfigurableClient):
                         background_nb_pixel += 1.0
 
             if len(mean_distances_from_center) > 0:
-                print "camera <%s> see :" % self.worlds[world_name].scene.nodes[camera_id].name
+                print "camera <%s> :" % self.worlds[world_name].scene.nodes[camera_id].name
                 for node_id, mean_dist in mean_distances_from_center.items():
                     mean_distances_from_center[node_id] = mean_dist / nb_pixel[node_id]
                     camera_node = self.worlds[world_name].scene.nodes[camera_id]
@@ -126,30 +138,40 @@ class BeliefsFilter(ReconfigurableClient):
                     else:
                         visibilities[node_id] = 0
                     if visibilities[node_id] > self.min_treshold:
-                        print " - object <%s> with %5f confidence" % (object_node.name, visibilities[node_id])
+                        print " - see object <%s> with %5f confidence" % (object_node.name, visibilities[node_id])
+                    else:
+                        del visibilities[node_id]
         return visibilities
 
-    def computeSituations(self, world_name, stamp, camera_id, visibilities):
+    def updateSituations(self, world_name, header, camera_id, visibilities):
         """
         """
         situations = []
-        for situation in self.worlds[world_name].timeline:
-            if self.worlds[world_name].timeline.getSituationProperty(situation.id, "predicate") == "isVisible":
-                subject_id = self.worlds[world_name].timeline.getSituationProperty(situation.id, "subject")
-                object_id = self.worlds[world_name].timeline.getSituationProperty(situation.id, "subject")
-                if camera_id == subject_id:
-                    if object_id in visibilities:
-                        situation.confidence = visibilities[object_id]
-                        del visibilities[object_id]
-                    else:
-                        situation.end = stamp
-                    situations.append(situation)
+        situations_to_update = []
+        situations_ids_ended = []
+        for situation in self.worlds[world_name].timeline.situations.values():
+            if situation.end.data == rospy.Time(0):
+                if self.worlds[world_name].timeline.getSituationProperty(situation.id, "predicate") == "isVisible":
+                    subject_id = self.worlds[world_name].timeline.getSituationProperty(situation.id, "subject")
+                    object_id = self.worlds[world_name].timeline.getSituationProperty(situation.id, "object")
+                    if camera_id == subject_id:
+                        if object_id in visibilities:
+                            situation.confidence = visibilities[object_id]
+                            print "update : %s with %f confidence" % (situation.description, visibilities[object_id])
+                            del visibilities[object_id]
+                            situations_to_update.append(situation)
+                        else:
+                            situation.end.data = header.stamp
+                            print "end : %s" % situation.description
+                            situations_ids_ended.append(situation.id)
+                        situations.append(situation)
 
-        for id_seen, visibility_score in visibilities:
+
+        for id_seen, visibility_score in visibilities.items():
             situation = Situation()
             situation.id = str(uuid.uuid4())
             situation.type = FACT
-            situation.description = self.worlds[world_name].scene.nodes[id_seen].name + "is visible by" + self.worlds[world_name].scene.nodes[camera_id].name
+            situation.description = self.worlds[world_name].scene.nodes[id_seen].name + " is visible by " + self.worlds[world_name].scene.nodes[camera_id].name
             predicate = Property()
             predicate.name = "predicate"
             predicate.data = "isVisible"
@@ -163,8 +185,14 @@ class BeliefsFilter(ReconfigurableClient):
             object.data = id_seen
             situation.properties.append(object)
             situation.confidence = visibility_score
-            situation.start.data = stamp
+            situation.start.data = header.stamp
+            situation.end.data = rospy.Time(0)
+            print "start : %s" % situation.description
+            situations_to_update.append(situation)
             situations.append(situation)
+
+        self.worlds[world_name].timeline.update(situations_to_update)
+        self.worlds[world_name].timeline.remove(situations_ids_ended)
         return situations
 
     def updateBulletNodes(self, world_name, node_id):
@@ -195,6 +223,6 @@ class BeliefsFilter(ReconfigurableClient):
 
 
 if __name__ == '__main__':
-    rospy.init_node("beliefs_filter")
-    bf = BeliefsFilter()
+    rospy.init_node("visibility_monitor")
+    vm = VisibilityMonitor()
     rospy.spin()

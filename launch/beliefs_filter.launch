@@ -7,10 +7,7 @@
   <arg name="nodelet_manager" default=""/>
   <arg name="launch-prefix" default=""/>
 
-  <arg name="default_inputs" default="env"/>
-  <arg name="ressource_folder" default="$(find laas_objects)/res/urdf/"/>
-  <arg name="time_step" default="0.01"/>
-  <arg name="simulation_step" default="0.3"/>
+  <arg name="default_inputs" default="merged_stable_monitored"/>
 
   <node name="uwds_server"
         pkg="nodelet" type="nodelet"
@@ -20,16 +17,13 @@
         launch-prefix="$(arg launch-prefix)"
         if="$(arg start_server)"/>
 
-  <node name="gravity_filter"
-        pkg="uwds_physics_clients" type="gravity_filter.py"
+  <node name="beliefs_filter"
+        pkg="uwds_physics_clients" type="beliefs_filter.py"
         respawn="$(arg respawn)"
         output="$(arg output)"
         launch-prefix="$(arg launch-prefix)">
     <rosparam subst_value="true">
       default_inputs: $(arg default_inputs)
-      ressource_folder: $(arg ressource_folder)
-      time_step: $(arg time_step)
-      simulation_step: $(arg simulation_step)
     </rosparam>
   </node>
 </launch>
