@@ -46,7 +46,7 @@ class VisibilityMonitor(ReconfigurableClient):
         """
         changes = self.monitor(world_name, header, invalidations)
         if len(changes.situations_to_update) > 0:
-            self.sendWorldChanges("visibilities", header, changes)
+            self.sendWorldChanges(world_name+"_visibilities", header, changes)
             rospy.loginfo("[%s::onChanges] Changes send (%d situations) in world <%s>", self.node_name, len(changes.situations_to_update), "visibilities")
 
     def monitor(self, world_name, header, invalidations):
@@ -74,7 +74,6 @@ class VisibilityMonitor(ReconfigurableClient):
                     situations = self.updateSituations(world_name, header, node_id, {})
                     for situation in situations:
                         changes.situations_to_update.append(situation)
-
         return changes
 
     def computeVisibilities(self, world_name, camera_id):
@@ -123,7 +122,6 @@ class VisibilityMonitor(ReconfigurableClient):
                                 visibilities[uwds_id] += 1 - min(1, dist_from_center/r)
                                 if max_visibility < visibilities[uwds_id]:
                                     max_visibility = visibilities[uwds_id]
-
                     else:
                         background_nb_pixel += 1.0
 
