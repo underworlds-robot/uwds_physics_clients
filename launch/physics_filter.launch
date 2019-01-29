@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="output" default="screen"/>
+  <arg name="respawn" default="false"/>
+  <arg name="start_manager" default="false"/>
+  <arg name="start_server" default="false"/>
+  <arg name="nodelet_manager" default=""/>
+  <arg name="launch-prefix" default=""/>
+
+  <arg name="default_inputs" default="env"/>
+  <arg name="ressource_folder" default="$(find laas_objects)/res/urdf/"/>
+  <arg name="time_step" default="0.005"/>
+  <arg name="simulation_step" default="0.07"/>
+
+  <node name="uwds_server"
+        pkg="nodelet" type="nodelet"
+        args="load uwds/UwdsServerNodelet $(arg nodelet_manager)"
+        respawn="$(arg respawn)"
+        output="$(arg output)"
+        launch-prefix="$(arg launch-prefix)"
+        if="$(arg start_server)"/>
+
+  <node name="physics_filter"
+        pkg="uwds_physics_clients" type="physics_filter.py"
+        respawn="$(arg respawn)"
+        output="$(arg output)"
+        launch-prefix="$(arg launch-prefix)">
+    <rosparam subst_value="true">
+      subscriber_buffer_size: 5
+      default_inputs: $(arg default_inputs)
+      ressource_folder: $(arg ressource_folder)
+      time_step: $(arg time_step)
+      simulation_step: $(arg simulation_step)
+      verbose : false
+    </rosparam>
+  </node>
+</launch>
