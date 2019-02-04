@@ -10,7 +10,7 @@
   <arg name="default_inputs" default="env"/>
   <arg name="ressource_folder" default="$(find laas_objects)/res/urdf/"/>
   <arg name="time_step" default="0.005"/>
-  <arg name="simulation_step" default="0.07"/>
+  <arg name="simulation_step" default="0.08"/>
 
   <node name="uwds_server"
         pkg="nodelet" type="nodelet"
@@ -26,11 +26,8 @@
         output="$(arg output)"
         launch-prefix="$(arg launch-prefix)">
     <rosparam subst_value="true">
-      subscriber_buffer_size: 5
       default_inputs: $(arg default_inputs)
       ressource_folder: $(arg ressource_folder)
-      time_step: $(arg time_step)
-      simulation_step: $(arg simulation_step)
       verbose : false
     </rosparam>
   </node>

@@ -10,7 +10,7 @@ import copy
 import uuid
 from pyuwds.reconfigurable_client import ReconfigurableClient
 from uwds_msgs.msg import Changes, Situation, Property
-from pyuwds.types import FILTER, MESH, ACTION, FACT, Node
+from pyuwds.types import FILTER, MESH, ACTION, FACT
 
 
 STABLE = 0
@@ -44,19 +44,19 @@ class PhysicsFilter(ReconfigurableClient):
         # reasoning parameters
         self.infer_actions = rospy.get_param("~infer_actions", True)
         self.perception_duration = rospy.get_param("~perception_duration", 0.8)
-        self.simulation_tolerance = rospy.get_param("~simulation_tolerance", 0.03) # 6cm
-        self.perception_tolerance = rospy.get_param("~perception_tolerance", 0.02) # 1cm
+        self.simulation_tolerance = rospy.get_param("~simulation_tolerance", 0.05)
+        self.perception_tolerance = rospy.get_param("~perception_tolerance", 0.01)
 
         # simulator parameters
         self.time_step = rospy.get_param("~time_step", 0.004)
-        self.simulation_step = rospy.get_param("~simulation_step", 0.03)
-        self.fall_simulation_step = rospy.get_param("~simulation_step", 0.07)
+        self.simulation_step = rospy.get_param("~simulation_step", 0.06)
+        self.fall_simulation_step = rospy.get_param("~simulation_step", 0.13)
         self.nb_step_fall = int(self.fall_simulation_step / self.time_step)
         self.nb_step = int(self.simulation_step / self.time_step)
         self.jump_distance = rospy.get_param("~jump_distance", 0.05)
 
         # init simulator
-        p.connect(p.DIRECT) # Initialize bullet non-graphical version
+        p.connect(p.GUI) # Initialize bullet non-graphical version
         p.setGravity(0, 0, -10)
         #p.setPhysicsEngineParameter(contactBreakingThreshold=0.01)
         p.setAdditionalSearchPath(self.ressource_folder)
@@ -88,6 +88,7 @@ class PhysicsFilter(ReconfigurableClient):
 
         self.isPerceived = {}
         self.isUnstable = {}
+        self.isMoving = {}
 
         self.isIn = {}
         self.isOnTop = {}
@@ -120,6 +121,7 @@ class PhysicsFilter(ReconfigurableClient):
         """
         """
         print "start reasoning"
+        start_reasoning_time = rospy.Time.now()
         changes = Changes()
 
         for mesh_id in invalidations.mesh_ids_updated:
@@ -130,6 +132,8 @@ class PhysicsFilter(ReconfigurableClient):
 
         for node_id in invalidations.node_ids_updated:
             node = self.worlds[world_name].scene.nodes[node_id]
+            if node_id not in self.isContaining:
+                self.isContaining[node_id] = {}
             #print "received invalidation for <"+node.name+">"
             if node_id in self.perceived_position:
                 self.previous_perceived_position[node_id] = self.perceived_position[node_id]
@@ -139,21 +143,26 @@ class PhysicsFilter(ReconfigurableClient):
             self.perceived_orientation[node_id] = [node.position.pose.orientation.x, node.position.pose.orientation.y, node.position.pose.orientation.z, node.position.pose.orientation.w]
             self.perceived_linear_velocity[node_id] = [node.velocity.twist.linear.x, node.velocity.twist.linear.y, node.velocity.twist.linear.z]
             self.perceived_angular_velocity[node_id] = [node.velocity.twist.angular.x, node.velocity.twist.angular.y, node.velocity.twist.angular.z]
+            if node_id not in self.previous_perceived_position:
+                self.updateBulletNode(world_name, node_id, self.perceived_position[node_id], self.perceived_orientation[node_id], self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
 
+            # if node_id in self.perceived_position:
+            #     self.previous_perceived_position[node_id] = self.perceived_position[node_id]
+            # if node_id in self.perceived_orientation:
+            #     self.previous_perceived_orientation[node_id] = self.perceived_orientation[node_id]
+        #
         for node_id, node in self.worlds[world_name].scene.nodes.items():
             if node.type == MESH:
                 self.isPerceived[node_id] = (rospy.Time.now() - node.last_update.data) < rospy.Duration(self.perception_duration)
-                if node_id not in self.isUnstable:
-                    self.isUnstable[node_id] = False
-                if self.isPerceived[node_id] is True:
+                if self.isPerceived[node_id]:
+                    if node_id not in self.isUnstable:
+                        self.isUnstable[node_id] = False
                     if self.isUnstable[node_id] is False:
-                        if node_id in self.previous_position:
+                        if node_id in self.previous_perceived_position:
                             if not(np.allclose(self.previous_perceived_position[node_id], self.perceived_position[node_id], atol=self.perception_tolerance) \
                                     and np.allclose(self.previous_perceived_orientation[node_id], self.perceived_orientation[node_id], atol=self.perception_tolerance)):
                                 self.updateBulletNode(world_name, node_id, self.perceived_position[node_id], self.perceived_orientation[node_id], self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
-                                #if not np.allclose(self.previous_position[node_id], self.perceived_position[node_id], atol=self.):
-                                if node_id not in self.isContaining:
-                                    self.isContaining[node_id] = {}
+                                self.isMoving[node_id] = True
                                 for object_id in self.isContaining[node_id]:
                                     object = self.worlds[world_name].scene.nodes[object_id]
                                     if object_id in self.previous_position:
@@ -162,15 +171,14 @@ class PhysicsFilter(ReconfigurableClient):
                                             t_prev = tf.transformations.translation_matrix(self.previous_position[node_id])
                                             t_perceived = tf.transformations.translation_matrix(self.perceived_position[node_id])
                                             offset = tf.transformations.translation_from_matrix(np.dot(np.linalg.inv(t_prev), t_perceived))
-                                            object_position = [object.position.pose.position.x+offset[0], object.position.pose.position.y+offset[1], object.position.pose.position.z+offset[2]]
-                                            new_object_orientation = self.previous_orientation[object_id]
-                                            self.updateBulletNode(world_name, object_id, object_position, new_object_orientation, self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
-                        else:
-                            self.updateBulletNode(world_name, node_id, self.perceived_position[node_id], self.perceived_orientation[node_id], self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
+                                            if not np.allclose(offset, [0, 0, 0], atol=0.03):
+                                                object_position = [object.position.pose.position.x+offset[0], object.position.pose.position.y+offset[1], object.position.pose.position.z+offset[2]]
+                                                new_object_orientation = self.previous_orientation[object_id]
+                                                self.updateBulletNode(world_name, object_id, object_position, new_object_orientation, self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
+                            else:
+                                self.isMoving[node_id] = False
                     else:
                         self.updateBulletNode(world_name, node_id, self.perceived_position[node_id], self.perceived_orientation[node_id], self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
-                        if node_id not in self.isContaining:
-                            self.isContaining[node_id] = {}
                         for object_id in self.isContaining[node_id]:
                             object = self.worlds[world_name].scene.nodes[object_id]
                             if object_id in self.previous_position:
@@ -179,14 +187,73 @@ class PhysicsFilter(ReconfigurableClient):
                                     t_prev = tf.transformations.translation_matrix(self.previous_position[node_id])
                                     t_perceived = tf.transformations.translation_matrix(self.perceived_position[node_id])
                                     offset = tf.transformations.translation_from_matrix(np.dot(np.linalg.inv(t_prev), t_perceived))
-                                    object_position = [object.position.pose.position.x+offset[0], object.position.pose.position.y+offset[1], object.position.pose.position.z+offset[2]]
-                                    new_object_orientation = self.previous_orientation[object_id]
-                                    self.updateBulletNode(world_name, object_id, object_position, new_object_orientation, self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
+                                    if not np.allclose(offset, [0, 0, 0], atol=0.03):
+                                        object_position = [object.position.pose.position.x+offset[0], object.position.pose.position.y+offset[1], object.position.pose.position.z+offset[2]]
+                                        new_object_orientation = self.previous_orientation[object_id]
+                                        self.updateBulletNode(world_name, object_id, object_position, new_object_orientation, self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
+                else:
+                    pass
+                    #self.updateBulletNode(world_name, node_id, self.perceived_position[node_id], self.perceived_orientation[node_id], self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
+                    # for object_id in self.isContaining[node_id]:
+                    #     object = self.worlds[world_name].scene.nodes[object_id]
+                    #     if object_id in self.previous_position:
+                    #         print "moving "+object.name
+                    #         if node_id in self.previous_position and object_id in self.previous_position:
+                    #             t_prev = tf.transformations.translation_matrix(self.previous_position[node_id])
+                    #             t_perceived = tf.transformations.translation_matrix(self.perceived_position[node_id])
+                    #             offset = tf.transformations.translation_from_matrix(np.dot(np.linalg.inv(t_prev), t_perceived))
+                    #             if not np.allclose(offset, [0, 0, 0], atol=0.03):
+                    #                 object_position = [object.position.pose.position.x+offset[0], object.position.pose.position.y+offset[1], object.position.pose.position.z+offset[2]]
+                    #                 new_object_orientation = self.previous_orientation[object_id]
+                    #                 self.updateBulletNode(world_name, object_id, object_position, new_object_orientation, self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
 
-        start_reasoning_time = rospy.Time.now()
+        #         if node_id not in self.isUnstable:
+        #             self.isUnstable[node_id] = False
+        #         if self.isPerceived[node_id] is True:
+        #             if self.isUnstable[node_id] is False:
+        #                 if node_id in self.previous_perceived_position:
+        #                     if not(np.allclose(self.previous_perceived_position[node_id], self.perceived_position[node_id], atol=self.perception_tolerance) \
+        #                             and np.allclose(self.previous_perceived_orientation[node_id], self.perceived_orientation[node_id], atol=self.perception_tolerance)):
+        #                         self.updateBulletNode(world_name, node_id, self.perceived_position[node_id], self.perceived_orientation[node_id], self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
+        #                         #if not np.allclose(self.previous_position[node_id], self.perceived_position[node_id], atol=self.):
+        #                         if node_id not in self.isContaining:
+        #                             self.isContaining[node_id] = {}
+        #                         for object_id in self.isContaining[node_id]:
+        #                             object = self.worlds[world_name].scene.nodes[object_id]
+        #                             if object_id in self.previous_position:
+        #                                 print "moving "+object.name
+        #                                 if node_id in self.previous_position and object_id in self.previous_position:
+        #                                     t_prev = tf.transformations.translation_matrix(self.previous_position[node_id])
+        #                                     t_perceived = tf.transformations.translation_matrix(self.perceived_position[node_id])
+        #                                     offset = tf.transformations.translation_from_matrix(np.dot(np.linalg.inv(t_prev), t_perceived))
+        #                                     object_position = [object.position.pose.position.x+offset[0], object.position.pose.position.y+offset[1], object.position.pose.position.z+offset[2]]
+        #                                     new_object_orientation = self.previous_orientation[object_id]
+        #                                     self.updateBulletNode(world_name, object_id, object_position, new_object_orientation, self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
+        #             else:
+        #                 self.updateBulletNode(world_name, node_id, self.perceived_position[node_id], self.perceived_orientation[node_id], self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
+                        # self.updateBulletNode(world_name, node_id, self.perceived_position[node_id], self.perceived_orientation[node_id], self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
+                        # if node_id in self.previous_perceived_position:
+                        #     if not(np.allclose(self.previous_perceived_position[node_id], self.perceived_position[node_id], atol=self.perception_tolerance) \
+                        #             and np.allclose(self.previous_perceived_orientation[node_id], self.perceived_orientation[node_id], atol=self.perception_tolerance)):
+                        #         if node_id not in self.isContaining:
+                        #             self.isContaining[node_id] = {}
+                        #         for object_id in self.isContaining[node_id]:
+                        #             object = self.worlds[world_name].scene.nodes[object_id]
+                        #             if object_id in self.previous_position:
+                        #                 print "moving "+object.name
+                        #                 if node_id in self.previous_position and object_id in self.previous_position:
+                        #                     t_prev = tf.transformations.translation_matrix(self.previous_position[node_id])
+                        #                     t_perceived = tf.transformations.translation_matrix(self.perceived_position[node_id])
+                        #                     offset = tf.transformations.translation_from_matrix(np.dot(np.linalg.inv(t_prev), t_perceived))
+                        #                     object_position = [object.position.pose.position.x+offset[0], object.position.pose.position.y+offset[1], object.position.pose.position.z+offset[2]]
+                        #                     new_object_orientation = self.previous_orientation[object_id]
+                        #                     self.updateBulletNode(world_name, object_id, object_position, new_object_orientation, self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
+
         state_id = p.saveState()
-
+        start_fall_reasoning_time = rospy.Time.now()
         for node_id in self.simulated_node_ids:
+            if self.isPerceived[node_id]:
+                self.updateBulletNode(world_name, node_id, self.perceived_position[node_id], self.perceived_orientation[node_id], self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
             self.isUnstable[node_id] = False
 
         for i in range(0, self.nb_step_fall):
@@ -201,27 +268,40 @@ class PhysicsFilter(ReconfigurableClient):
                     is_unstable = math.sqrt(pow(perceived_position[0]-infered_position[0], 2) + pow(perceived_position[1]-infered_position[1], 2) + pow(perceived_position[2]-infered_position[2], 2)) > self.simulation_tolerance
                     if self.isUnstable[node_id] is False and is_unstable:
                         self.isUnstable[node_id] = True
-                        #print node.name + " is unstable"# after "+str(i)+"/"+str(self.nb_step)+" steps"
+                        print node.name + " is unstable after "+str(i)+"/"+str(self.nb_step_fall)+" steps"
 
                 #if self.isUnstable[node_id]:
                     #self.updateBulletNode(world_name, node_id, self.perceived_position[node_id], self.perceived_orientation[node_id], self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
-
         p.restoreState(state_id)
+        end_fall_reasoning_time = rospy.Time.now()
+        print "fall reasoning duration : "+str((end_fall_reasoning_time - start_fall_reasoning_time).to_sec())
 
         for i in range(0, self.nb_step):
             p.stepSimulation()
             for node_id in self.simulated_node_ids:
                 if self.isUnstable[node_id] and self.isPerceived[node_id]:
                     node = self.worlds[world_name].scene.nodes[node_id]
-                    print node.name + " is unstable"
+                    #print node.name + " is unstable"
                     self.updateBulletNode(world_name, node_id, self.perceived_position[node_id], self.perceived_orientation[node_id], self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
 
-        end_reasoning_time = rospy.Time.now()
-        print "reasoning frequency : "+str(1.0/(end_reasoning_time - start_reasoning_time).to_sec())
-
         for node_id, node in self.worlds[world_name].scene.nodes.items():
+            # print len(self.simulated_node_ids)
             if node_id in self.simulated_node_ids:
-                if self.isUnstable[node_id] and self.isPerceived[node_id]:
+                if self.isUnstable[node_id] is True and self.isPerceived[node_id] is True:
+                    if node_id in self.node_action_state:
+                        if self.node_action_state[node_id] == PLACED and self.infer_actions:
+                            print node.name + " picked up"
+                            situation = Situation()
+                            situation.id = str(uuid.uuid4())
+                            situation.type = ACTION
+                            situation.description = node.name + " picked up"
+                            situation.confidence = PICK_CONFIDENCE
+                            situation.start.data = header.stamp
+                            situation.end.data = header.stamp
+                            situation.properties.append(Property("subject", node_id))
+                            situation.properties.append(Property("action", "Place"))
+                            changes.situations_to_update.append(situation)
+                    self.node_action_state[node_id] = PICKEDUP
                     node.position.pose.position.x = self.perceived_position[node_id][0]
                     node.position.pose.position.y = self.perceived_position[node_id][1]
                     node.position.pose.position.z = self.perceived_position[node_id][2]
@@ -237,7 +317,23 @@ class PhysicsFilter(ReconfigurableClient):
                     node.velocity.twist.angular.z = self.perceived_angular_velocity[node_id][2]
                     self.previous_position[node_id] = self.perceived_position[node_id]
                     self.previous_orientation[node_id] = self.perceived_orientation[node_id]
+                    self.updateBulletNode(world_name, node_id, self.perceived_position[node_id], self.perceived_orientation[node_id], self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
+                    changes.nodes_to_update.append(node)
                 else:
+                    if node_id in self.node_action_state:
+                        if self.node_action_state[node_id] == PICKEDUP and self.infer_actions:
+                            print node.name + " placed"
+                            situation = Situation()
+                            situation.id = str(uuid.uuid4())
+                            situation.type = ACTION
+                            situation.description = node.name + " placed"
+                            situation.confidence = PLACE_CONFIDENCE
+                            situation.start.data = header.stamp
+                            situation.end.data = header.stamp
+                            situation.properties.append(Property("subject", node_id))
+                            situation.properties.append(Property("action", "Pick"))
+                            changes.situations_to_update.append(situation)
+                        self.node_action_state[node_id] = PLACED
                     infered_position, infered_orientation = p.getBasePositionAndOrientation(self.bullet_node_id_map[node_id])
                     infered_linear_velocity, infered_angular_velocity = p.getBaseVelocity(self.bullet_node_id_map[node_id])
                     x, y, z = infered_position
@@ -259,40 +355,7 @@ class PhysicsFilter(ReconfigurableClient):
                     node.velocity.twist.angular.z = z
                     self.previous_position[node_id] = infered_position
                     self.previous_orientation[node_id] = infered_orientation
-                changes.nodes_to_update.append(node)
-
-                if self.infer_actions is True:
-                    if node_id not in self.node_action_state:
-                        self.node_action_state[node_id] = PLACED
-
-                    if self.isPerceived[node_id] and self.isUnstable[node_id]:
-                        if self.node_action_state[node_id] == PLACED:
-                            #print node.name + " picked up"
-                            situation = Situation()
-                            situation.id = str(uuid.uuid4())
-                            situation.type = ACTION
-                            situation.description = node.name + " picked up"
-                            situation.confidence = PICK_CONFIDENCE
-                            situation.start.data = header.stamp
-                            situation.end.data = header.stamp
-                            situation.properties.append(Property("subject", node_id))
-                            situation.properties.append(Property("action", "Place"))
-                            changes.situations_to_update.append(situation)
-                        self.node_action_state[node_id] = PICKEDUP
-                    else:
-                        if self.node_action_state[node_id] == PICKEDUP:
-                            #print node.name + " placed"
-                            situation = Situation()
-                            situation.id = str(uuid.uuid4())
-                            situation.type = ACTION
-                            situation.description = node.name + " placed"
-                            situation.confidence = PLACE_CONFIDENCE
-                            situation.start.data = header.stamp
-                            situation.end.data = header.stamp
-                            situation.properties.append(Property("subject", node_id))
-                            situation.properties.append(Property("action", "Pick"))
-                            changes.situations_to_update.append(situation)
-                        self.node_action_state[node_id] = PLACED
+                    changes.nodes_to_update.append(node)
             else:
                 if node_id in invalidations.node_ids_updated:
                     changes.nodes_to_update.append(node)
@@ -360,9 +423,13 @@ class PhysicsFilter(ReconfigurableClient):
                         changes.situations_to_update.append(sit)
                         del self.isOnTop[node1.id][node2.id]
 
+        end_reasoning_time = rospy.Time.now()
+        #print "reasoning duration : "+str((end_reasoning_time - start_reasoning_time).to_sec())
         return changes
 
     def updateBulletNode(self, world_name, node_id, position, orientation, linear, angular):
+        """
+        """
         if self.worlds[world_name].scene.rootID not in self.bullet_node_id_map:
             self.bullet_node_id_map[self.worlds[world_name].scene.rootID] = p.loadURDF("plane.urdf")
 
@@ -373,6 +440,8 @@ class PhysicsFilter(ReconfigurableClient):
                 rospy.loginfo("[%s::updateBulletNodeNodes] "+node.name+".urdf' loaded successfully", self.node_name)
                 p.changeDynamics(self.bullet_node_id_map[node_id], -1, frictionAnchor=1, rollingFriction=1.0, spinningFriction=1.0, lateralFriction=1.0)
                 self.simulated_node_ids.append(node_id)
+                if node_id not in self.node_action_state:
+                    self.node_action_state[node_id] = PLACED
             except Exception as e:
                 self.bullet_node_id_map[node_id] = -1
                 rospy.logwarn("[%s::updateBulletNodeNodes] "+str(e))
@@ -384,7 +453,7 @@ class PhysicsFilter(ReconfigurableClient):
 
     def aabb(self, node):
         """
-        Compute Aligned Axis Bounding Box from Oriented Axis Bounding Box by transforming the corners of the oabb by the node pose
+        Compute world aabb by transforming the corners of the aabb by the node pose
         """
         for property in node.properties:
             if property.name == "aabb":
@@ -496,7 +565,7 @@ class PhysicsFilter(ReconfigurableClient):
         if z1 > z2 - EPSILON:
             return False
 
-        if z1 < z3 + 2*EPSILON:
+        if z1 < z3 + EPSILON:
             return False
 
         return self.weakly_cont(self.bb_footprint(bb1), self.bb_footprint(bb2))
