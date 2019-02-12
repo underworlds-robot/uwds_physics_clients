@@ -43,13 +43,13 @@ class PhysicsFilter(ReconfigurableClient):
         self.ressource_folder = rospy.get_param("~ressource_folder")
 
         # reasoning parameters
+        self.infer_actions = rospy.get_param("~infer_actions", True)
         self.perception_duration = rospy.get_param("~perception_duration", 1.4)
         self.simulation_tolerance = rospy.get_param("~simulation_tolerance", 0.04)
         self.perception_tolerance = rospy.get_param("~perception_tolerance", 0.01)
 
         # simulator parameters
         self.time_step = rospy.get_param("~time_step", 0.004)
-
         self.reasoning_frequency = rospy.get_param("~reasoning_frequency", 26)
         self.simulation_step = rospy.get_param("~simulation_step", 0.15)
 
