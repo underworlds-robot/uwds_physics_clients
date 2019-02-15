@@ -32,7 +32,7 @@ PICK_CONFIDENCE = 0.95
 IN_CONFIDENCE = 0.75
 ONTOP_CONFIDENCE = 0.95
 
-EPSILON = 0.02  # 1cm
+EPSILON = 0.01  # 1cm
 
 class PhysicsFilter(ReconfigurableClient):
     """
@@ -57,7 +57,7 @@ class PhysicsFilter(ReconfigurableClient):
         self.nb_step = int(self.simulation_step / self.time_step)
 
         # init simulator
-        p.connect(p.GUI) # Initialize bullet non-graphical version
+        p.connect(p.DIRECT) # Initialize bullet non-graphical version
         p.setGravity(0, 0, -10)
         #p.setPhysicsEngineParameter(contactBreakingThreshold=0.01)
         p.setAdditionalSearchPath(self.ressource_folder)
@@ -149,9 +149,9 @@ class PhysicsFilter(ReconfigurableClient):
                     self.updateBulletNode(world_name, node_id, self.perceived_position[node_id], self.perceived_orientation[node_id], self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
                 for object_id in self.isContaining[node_id]:
                     object = self.worlds[world_name].scene.nodes[object_id]
-                    if object_id in self.previous_position:
+                    if node_id in self.previous_position and object_id in self.previous_position:
                         if node_id in self.previous_perceived_position and object_id in self.previous_perceived_position:
-                            t_prev = tf.transformations.translation_matrix(self.previous_perceived_position[node_id])
+                            t_prev = tf.transformations.translation_matrix(self.previous_position[node_id])
                             t_perceived = tf.transformations.translation_matrix(self.perceived_position[node_id])
                             offset = tf.transformations.translation_from_matrix(np.dot(np.linalg.inv(t_prev), t_perceived))
                             # if not np.allclose(offset, [0, 0, 0], atol=0.001):
@@ -334,6 +334,7 @@ class PhysicsFilter(ReconfigurableClient):
                 else:
                     if node2.id in self.isIn[node1.id]:
                         self.isIn[node1.id][node2.id].end.data = now
+                        self.isIn[node1.id][node2.id].description = node1.name + " was in " + node2.name
                         sit = self.isIn[node1.id][node2.id]
                         changes.situations_to_update.append(sit)
                         del self.isIn[node1.id][node2.id]
@@ -355,6 +356,7 @@ class PhysicsFilter(ReconfigurableClient):
                         changes.situations_to_update.append(sit)
                 else:
                     if node2.id in self.isOnTop[node1.id]:
+                        self.isOnTop[node1.id][node2.id].description = node1.name + " was on " + node2.name
                         self.isOnTop[node1.id][node2.id].end.data = now
                         sit = self.isOnTop[node1.id][node2.id]
                         changes.situations_to_update.append(sit)
@@ -376,7 +378,7 @@ class PhysicsFilter(ReconfigurableClient):
             try:
                 self.bullet_node_id_map[node_id] = p.loadURDF(node.name+".urdf", position, orientation)
                 rospy.loginfo("[%s::updateBulletNodeNodes] "+node.name+".urdf' loaded successfully", self.node_name)
-                p.changeDynamics(self.bullet_node_id_map[node_id], -1, frictionAnchor=0, rollingFriction=0.9, spinningFriction=0.9, lateralFriction=1.0)
+                p.changeDynamics(self.bullet_node_id_map[node_id], -1, rollingFriction=.98, spinningFriction=.98, lateralFriction=.98)
                 self.simulated_node_ids.append(node_id)
                 if node_id not in self.node_action_state:
                     self.node_action_state[node_id] = PLACED
@@ -446,10 +448,7 @@ class PhysicsFilter(ReconfigurableClient):
         Modified from severin lemaignan underworlds client example :
         see : https://github.com/severin-lemaignan/underworlds/blob/master/clients/spatial_relations.py
         """
-        if prev is False:
-            return (a_min <= b_max - EPSILON) and (b_min <= a_max + EPSILON)
-        else:
-            return (a_min <= b_max + EPSILON) and (b_min <= a_max - EPSILON)
+        return (a_min <= b_max) and (b_min <= a_max)
 
     def weakly_cont(self, rect1, rect2, prev=False):
         """Obj1 is weakly contained if the base of the object is surrounded
@@ -459,10 +458,7 @@ class PhysicsFilter(ReconfigurableClient):
         """
         (l1, b1), (r1, t1) = rect1
         (l2, b2), (r2, t2) = rect2
-        if prev is False:
-            return (l1 >= l2 - EPSILON) and (b1 >= b2 - EPSILON) and (r1 <= r2 - EPSILON) and (t1 <= t2 - EPSILON)
-        else:
-            return (l1 >= l2 + EPSILON) and (b1 >= b2 + EPSILON) and (r1 <= r2 + EPSILON) and (t1 <= t2 + EPSILON)
+        return (l1 >= l2) and (b1 >= b2) and (r1 <= r2) and (t1 <= t2)
 
     def isabove(self, bb1, bb2, prev=False):
         """
@@ -480,7 +476,7 @@ class PhysicsFilter(ReconfigurableClient):
         x1, y1, z1 = bb1_min
         x2, y2, z2 = bb2_max
 
-        if z1 < z2 - EPSILON:
+        if z1 < z2 - 2 * EPSILON:
             return False
 
         return self.overlap(self.bb_footprint(bb1), self.bb_footprint(bb2))
@@ -522,7 +518,7 @@ class PhysicsFilter(ReconfigurableClient):
         x1, y1, z1 = bb1_min
         x2, y2, z2 = bb2_max
 
-        return z1 < z2 + EPSILON and self.isabove(bb1, bb2)
+        return z1 < z2 + 2 * EPSILON and self.isabove(bb1, bb2)
 
 
 if __name__ == '__main__':
