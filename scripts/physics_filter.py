@@ -6,11 +6,12 @@ import pybullet as p
 import numpy as np
 from tf import transformations as tf
 import math
-import copy
 import uuid
 from pyuwds.reconfigurable_client import ReconfigurableClient
 from uwds_msgs.msg import Changes, Situation, Property, Invalidations
-from pyuwds.types import FILTER, MESH, ACTION, FACT
+from pyuwds.uwds import FILTER
+from pyuwds.types.nodes import MESH
+from pyuwds.types.timeline import ACTION, FACT
 from std_msgs.msg import Header
 
 PLACED = 0
@@ -96,6 +97,7 @@ class PhysicsFilter(ReconfigurableClient):
         self.isContaining = {}
 
         ReconfigurableClient.__init__(self, "gravity_filter", FILTER)
+        rospy.sleep(0.5)
 
         self.timer = rospy.Timer(rospy.Duration(1.0/self.reasoning_frequency), self.reasoningCallback)
 
@@ -167,10 +169,11 @@ class PhysicsFilter(ReconfigurableClient):
     def reasoningCallback(self, timer):
         header = Header()
         header.stamp = rospy.Time.now()
-        world_name = self.input_worlds[0]
-        invalidations = Invalidations()
-        changes = self.filter(world_name, header, invalidations)
-        self.ctx.worlds[world_name+"_stable"].update(header, changes)
+        if len(self.input_worlds)>0:
+            world_name = self.input_worlds[0]
+            invalidations = Invalidations()
+            changes = self.filter(world_name, header, invalidations)
+            self.ctx.worlds()[world_name+"_stable"].update(header, changes)
 
     def filter(self, world_name, header, invalidations):
         """
@@ -219,7 +222,6 @@ class PhysicsFilter(ReconfigurableClient):
                     if self.isUnstable[node_id]:
                         self.updateBulletNode(world_name, node_id, self.perceived_position[node_id], self.perceived_orientation[node_id], self.perceived_linear_velocity[node_id], self.perceived_angular_velocity[node_id])
 
-
         end_fall_reasoning_time = rospy.Time.now()
 
         for node_id, node in self.worlds[world_name].scene.nodes.items():
@@ -229,7 +231,7 @@ class PhysicsFilter(ReconfigurableClient):
                     if (self.node_action_state[node_id] == PLACED or self.node_action_state[node_id] == RELEASED) and self.infer_actions and self.pick_confidence[node_id] > PICK_CONFIDENCE:
                         print node.name + " picked up"
                         situation = Situation()
-                        situation.id = str(uuid.uuid4())
+                        situation.id = str(uuid.uuid4().hex)
                         situation.type = ACTION
                         situation.description = node.name + " picked up"
                         situation.confidence = PICK_CONFIDENCE
@@ -277,7 +279,7 @@ class PhysicsFilter(ReconfigurableClient):
                                 if self.place_confidence[node_id] > PLACE_CONFIDENCE:
                                     print node.name + " placed"
                                     situation = Situation()
-                                    situation.id = str(uuid.uuid4())
+                                    situation.id = str(uuid.uuid4().hex)
                                     situation.type = ACTION
                                     situation.description = node.name + " placed"
                                     situation.confidence = PLACE_CONFIDENCE
@@ -300,7 +302,7 @@ class PhysicsFilter(ReconfigurableClient):
                                 if self.release_confidence[node_id] > RELEASE_CONFIDENCE:
                                     print node.name + " released"
                                     situation = Situation()
-                                    situation.id = str(uuid.uuid4())
+                                    situation.id = str(uuid.uuid4().hex)
                                     situation.type = ACTION
                                     situation.description = node.name + " released"
                                     situation.confidence = RELEASE_CONFIDENCE
