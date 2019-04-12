@@ -9,7 +9,9 @@ import pybullet as p
 import pybullet_data
 from pyuwds.reconfigurable_client import ReconfigurableClient
 from uwds_msgs.msg import Changes, Situation, Property
-from pyuwds.types import FILTER, MESH, CAMERA, FACT
+from pyuwds.types.nodes import MESH, CAMERA
+from pyuwds.types.situations import FACT
+from pyuwds.uwds import FILTER
 import tf
 
 class VisibilityMonitor(ReconfigurableClient):
@@ -58,20 +60,20 @@ class VisibilityMonitor(ReconfigurableClient):
 
         evaluated = []
         not_evaluated = []
-        for node_id, node in self.worlds[world_name].scene.nodes.items():
+        for node in self.worlds()[world_name].scene().nodes():
             #if node_id in invalidations.node_ids_updated:
             if node.type == CAMERA:
-                if node_id in invalidations.node_ids_updated:
-                    visibilities = self.computeVisibilities(world_name, node_id)
-                    situations = self.updateSituations(world_name, header, node_id, visibilities)
+                if node.id in invalidations.node_ids_updated:
+                    visibilities = self.computeVisibilities(world_name, node.id)
+                    situations = self.updateSituations(world_name, header, node.id, visibilities)
                     for situation in situations:
                         changes.situations_to_update.append(situation)
-                    evaluated.append(node_id)
+                    evaluated.append(node.id)
 
-        for node_id, node in self.worlds[world_name].scene.nodes.items():
+        for node in self.worlds()[world_name].scene().nodes():
             if node.type == CAMERA:
                 if (rospy.Time() - node.last_observation.data).to_sec() > 1.0:
-                    situations = self.updateSituations(world_name, header, node_id, {})
+                    situations = self.updateSituations(world_name, header, node.id, {})
                     for situation in situations:
                         changes.situations_to_update.append(situation)
         return changes
@@ -149,9 +151,9 @@ class VisibilityMonitor(ReconfigurableClient):
         situations_ids_ended = []
         for situation in self.worlds[world_name].timeline.situations.values():
             if situation.end.data == rospy.Time(0):
-                if self.worlds[world_name].timeline.getSituationProperty(situation.id, "predicate") == "isVisible":
-                    subject_id = self.worlds[world_name].timeline.getSituationProperty(situation.id, "subject")
-                    object_id = self.worlds[world_name].timeline.getSituationProperty(situation.id, "object")
+                if self.worlds()[world_name].timeline().get_situation_property(situation.id, "predicate") == "isVisible":
+                    subject_id = self.worlds()[world_name].timeline().get_situation_property(situation.id, "subject")
+                    object_id = self.worlds()[world_name].timeline().get_situation_property(situation.id, "object")
                     if camera_id == subject_id:
                         if object_id in visibilities:
                             situation.confidence = visibilities[object_id]
@@ -189,8 +191,8 @@ class VisibilityMonitor(ReconfigurableClient):
             situations_to_update.append(situation)
             situations.append(situation)
 
-        self.worlds[world_name].timeline.update(situations_to_update)
-        self.worlds[world_name].timeline.remove(situations_ids_ended)
+        self.worlds()[world_name].timeline().update(situations_to_update)
+        self.worlds()[world_name].timeline().remove(situations_ids_ended)
         return situations
 
     def updateBulletNodes(self, world_name, node_id):

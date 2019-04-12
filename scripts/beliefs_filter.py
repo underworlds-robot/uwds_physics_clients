@@ -53,12 +53,12 @@ class BeliefsFilter(ReconfigurableClient):
         #print len(invalidations.situation_ids_updated)
         for situation in self.worlds[world_name].timeline.situations.values():
             if situation.end.data == rospy.Time(0):
-                if self.worlds[world_name].timeline.getSituationProperty(situation.id, "predicate") == "isVisible":
-                    subject_id = self.worlds[world_name].timeline.getSituationProperty(situation.id, "subject")
-                    object_id = self.worlds[world_name].timeline.getSituationProperty(situation.id, "object")
+                if self.ctx.worlds()[world_name].timeline().by_property(situation.id, "predicate") == "isVisible":
+                    subject_id = self.ctx.worlds()[world_name].timeline().by_property(situation.id, "subject")
+                    object_id = self.ctx.worlds()[world_name].timeline().by_property(situation.id, "object")
                     if subject_id not in beliefs_map:
                         beliefs_map[subject_id] = {}
-                    beliefs_map[subject_id][object_id] = self.worlds[world_name].timeline.situations[situation.id].confidence
+                    beliefs_map[subject_id][object_id] = self.ctx.worlds()[world_name].timeline().situations()[situation.id].confidence
 
         for subject_id in beliefs_map.keys():
             if subject_id not in changes:
