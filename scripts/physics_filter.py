@@ -40,7 +40,7 @@ class PhysicsFilter(ReconfigurableClient):
         self.perception_duration = rospy.get_param("~perception_duration", 0.9)
         self.simulation_tolerance = rospy.get_param("~simulation_tolerance", 0.045)
         self.perception_tolerance = rospy.get_param("~perception_tolerance", 0.01)
-
+        gui = rospy.get_param("~use_gui", False)
         # simulator parameters
         self.time_step = rospy.get_param("~time_step", 1.0/240)
         self.reasoning_frequency = rospy.get_param("~reasoning_frequency", 24)
@@ -48,7 +48,10 @@ class PhysicsFilter(ReconfigurableClient):
         # self.nb_step_fall = int(self.fall_simulation_step / self.time_step)
         self.nb_step = int(self.simulation_step / self.time_step)
         # init simulator
-        p.connect(p.DIRECT) # Initialize bullet non-graphical version
+        if gui is True:
+            p.connect(p.GUI)
+        else:
+            p.connect(p.DIRECT)
         p.setGravity(0, 0, -10)
         #p.setPhysicsEngineParameter(contactBreakingThreshold=0.01)
         p.setAdditionalSearchPath(self.ressource_folder)
@@ -428,7 +431,7 @@ class PhysicsFilter(ReconfigurableClient):
                         del self.isOnTop[node1.id][node2.id]
 
         end_reasoning_time = rospy.Time.now()
-        if (1.0/(end_reasoning_time - start_reasoning_time).to_sec() < self.reasoning_frequency):
+        if (1.0/(end_reasoning_time - start_reasoning_time).to_sec() < self.reasoning_frequency*0.5):
             rospy.logwarn("[%s::filter] reasoning too slow ! %f", self.ctx.name(), 1.0/(end_reasoning_time - start_reasoning_time).to_sec())
         return changes
 
@@ -441,8 +444,22 @@ class PhysicsFilter(ReconfigurableClient):
         node = self.ctx.worlds()[world_name].scene().nodes()[node_id]
         if node_id not in self.bullet_node_id_map:
             try:
-                self.bullet_node_id_map[node_id] = p.loadURDF(node.name+".urdf", position, orientation)
-                rospy.loginfo("[%s::updateBulletNodeNodes] "+node.name+".urdf' loaded successfully", self.ctx.name())
+                label = node.name.replace("_"," ").replace("."," ").replace("-"," ").lower()
+                result = []
+                for word in label.split(" "):
+                    try:
+                        test = int(word)
+                    except ValueError:
+                        result.append(word)
+                first = True
+                for word in result:
+                    if first is True:
+                        label = word
+                        first = False
+                    else:
+                        label += "_" + word
+                self.bullet_node_id_map[node_id] = p.loadURDF(label+".urdf", position, orientation)
+                rospy.loginfo("[%s::updateBulletNodeNodes] "+label+".urdf' loaded successfully", self.ctx.name())
                 p.changeDynamics(self.bullet_node_id_map[node_id], -1, frictionAnchor=1, rollingFriction=1.0, spinningFriction=1.0, lateralFriction=1.0)
                 self.simulated_node_ids.append(node_id)
                 if node_id not in self.node_action_state:

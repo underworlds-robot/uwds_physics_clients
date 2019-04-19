@@ -11,6 +11,7 @@
   <arg name="ressource_folder" default="$(find laas_objects)/res/urdf/"/>
   <arg name="time_step" default="0.005"/>
   <arg name="simulation_step" default="0.08"/>
+  <arg name="use_gui" default="true"/>
 
   <node name="uwds_server"
         pkg="nodelet" type="nodelet"
@@ -28,6 +29,7 @@
     <rosparam subst_value="true">
       default_inputs: $(arg default_inputs)
       ressource_folder: $(arg ressource_folder)
+      use_gui: $(arg use_gui)
       verbose : false
     </rosparam>
   </node>
